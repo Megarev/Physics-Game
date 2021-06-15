@@ -18,11 +18,13 @@ private:
     float e = 0.1f; // Coefficient of restitution
     float sf = 0.8f, df = 0.4f; // Coefficient of static friction and dynamic friction
 
-    olc::Pixel color;
+    int id = 0;
+
+    olc::Pixel color = olc::WHITE;
 public:
     RigidBody() {}
-    RigidBody(const olc::vf2d& p, int _n, float _len, float _angle, float a, float m, float _e = 0.1f, float _sf = 0.8f, float _df = 0.4f) 
-        : position(p), n(_n), len(_len), angle(_angle), angular_velocity(a), mass(m), e(_e), sf(_sf), df(_df) {
+    RigidBody(const olc::vf2d& p, int _n, float _len, float _angle, float a, float m, float _e = 0.1f, float _sf = 0.8f, float _df = 0.4f, int _id = 0) 
+        : position(p), n(_n), len(_len), angle(_angle), angular_velocity(a), mass(m), e(_e), sf(_sf), df(_df), id(_id) {
         for (int i = 0; i < n; i++) {
             model.push_back({ cosf(2.0f * PI / n * i), sinf(2.0f * PI / n * i) });
         }
@@ -34,11 +36,12 @@ public:
         inv_I = I == 0.0f ? 0.0f : 1.0f / I;
     }
 
+    void SetModel(const std::vector<olc::vf2d>& m) { model = m; }
     void SetColor(const olc::Pixel& c) { color = c; }
 
-    void Logic(float dt, bool is_debug = false) {
+    void Logic(float dt) {
         // Physics Logic
-        if (mass > 0.0f && !is_debug) velocity.y += g * dt; // Gravity
+        if (mass > 0.0f) velocity.y += g * dt; // Gravity
 
         position += velocity * dt;
         angle += angular_velocity * dt;
@@ -163,13 +166,17 @@ public:
     void SetAngularVelocity(float a) { angular_velocity = a; }
     const float& GetAngularVelocity() const { return angular_velocity; }
 
+    void AddVelocity(const olc::vf2d& _v) { velocity += _v; }
+
     void SetVelocity(const olc::vf2d& v) { velocity = v; }
     const olc::vf2d& GetVelocity() const { return velocity; }
 
     const float& GetLen() const { return len; }
     const float& GetRestitution() const { return e; }
 
-    const float& GetFriction(int n) const { return !n ? sf : df; } 
+    const float& GetFriction(int n) const { return !n ? sf : df; }
+
+    const int& GetID() const { return id; }
 };
 
 using Edge = std::tuple<olc::vf2d, olc::vf2d, olc::vf2d>;
@@ -336,9 +343,59 @@ public:
     }
 };
 
+class Constraint {
+private:
+    olc::vf2d pivot_pos, point_pos;
+    float len = 0.0f, k = 0.8f, b = 0.2f;
+    float m_stretch = 0.25f;
+
+    int rb_id = -1;
+public:
+    Constraint() {}
+    Constraint(const olc::vf2d& p, float _len, float _k, float _b)
+        : pivot_pos(p), len(_len), k(_k), b(_b) {}
+    
+    void AttachObject(int id) { rb_id = id; }
+
+    void Update(RigidBody& rb, float dt) {
+        if (rb_id < 0) return;
+        olc::vf2d direction = rb.GetPosition() - pivot_pos;
+        float dir_mag2 = direction.mag2();
+
+        if (dir_mag2 > len * len) { 
+
+            float extension = direction.mag();
+            olc::vf2d dir = direction / extension;
+
+            direction = dir * len;
+            //rb->SetPosition(pivot_pos + direction);
+            const olc::vf2d& offset = (extension - len) * dir;
+            const olc::vf2d& force = -k * offset - b * rb.GetVelocity();
+
+            rb.AddVelocity(force * rb.GetInvMass() * dt);
+            
+            // if (dir_mag2 > (len * (1.0f + m_stretch)) * (len * (1.0f + m_stretch))) {
+            //     rb.SetPosition(pivot_pos + dir * len * (1.0f + m_stretch));
+            // }
+        }
+        
+        point_pos = rb.GetPosition();
+    }
+
+    void Draw(olc::PixelGameEngine* pge, olc::Pixel color = olc::WHITE) {
+        pge->DrawLine(pivot_pos, point_pos, color);
+    }
+
+    void SetPosition(RigidBody& rb, const olc::vf2d& p) { rb.SetPosition(p); }
+
+    const int& GetID() const { return rb_id; }
+};
+
 class Scene {
 private:
     std::vector<RigidBody> shapes;
+    std::vector<Constraint> constraints;
+
     float accumulator = 0.0f;
 
     olc::vf2d screen_size;
@@ -374,15 +431,23 @@ public:
             }
 
             for (auto& m : manifolds) {
-                const auto& edge_data = m.GetRefIncEdge();
-                const auto& cp = m.GetContactPoints();
+                m.GetContactPoints();
 
                 m.ApplyForces(inv_FPS);
                 m.PositionalCorrection();
             }
-
+            
+            std::vector<int> shapeID;
+            for (auto& c : constraints) {
+                c.Update(shapes[c.GetID()], inv_FPS);
+                shapeID.push_back(c.GetID());
+            }
+            
             for (int i = shapes.size() - 1; i >= 0; i--) {
                 shapes[i].Logic(inv_FPS);
+
+                if (std::find(shapeID.begin(), shapeID.end(), i) != shapeID.end()) continue;
+
                 if (!shapes[i].IsConstrained({ 0.0f, 0.0f }, { screen_size.x, screen_size.y })) {
                     shapes.erase(shapes.begin() + i);
                 }
@@ -392,19 +457,32 @@ public:
 
     void Draw(olc::PixelGameEngine* pge, bool is_fill = false, float alpha = 0.0f) {
         for (auto& s : shapes) s.Draw(pge, is_fill, alpha);
+        for (auto& c : constraints) c.Draw(pge);
     }
 
     void AddShape(const olc::vf2d& p, int n_vertices, float len, float angle, float angular_velocity, float mass, olc::Pixel color = olc::WHITE, float e = 0.1f, float sf = 0.8f, float df = 0.4f) {
-        shapes.push_back(RigidBody(p, n_vertices, len, angle, angular_velocity, mass, e, sf, df));
+        shapes.push_back(RigidBody(p, n_vertices, len, angle, angular_velocity, mass, e, sf, df, shapes.size()));
         shapes.back().SetColor(color);
     }
 
-    const std::vector<RigidBody>& GetShapes() const { return shapes; }
+    void AddShape(const RigidBody& rb) { 
+        shapes.push_back(rb);
+    }
+
+    void AddConstraint(const olc::vf2d& p, float len, float k, float b, int index = -1) {
+        constraints.push_back(Constraint(p, len, k, b));
+        if (index >= 0) constraints.back().AttachObject(index);
+    }
+
+    void AddConstraint(const Constraint& c) { constraints.push_back(c); }
+
+    std::vector<RigidBody>& GetShapes() { return shapes; }
 };
 
 class Game : public olc::PixelGameEngine {
 private:
     Scene scene;
+    int n_iter = 2;
 
     static float Random(float a, float b) {
         std::random_device rd;
@@ -423,6 +501,11 @@ public:
         scene.SetBounds({ ScreenWidth(), ScreenHeight() });
 
         scene.AddShape({ ScreenWidth() * 0.5f, ScreenHeight() * 1.25f }, 4, ScreenWidth() * 0.5f, PI/4.0f, 0.0f, 0.0f);
+        scene.AddShape({ ScreenWidth() * 0.5f, ScreenHeight() * 0.5f }, 4, 25.0f, PI/4.0f, 0.0f, 1.0f);
+
+        Constraint rope({ ScreenWidth() * 0.5f, ScreenHeight() * 0.25f }, 60.0f, 0.8f, 0.2f);
+        rope.AttachObject(scene.GetShapes()[1].GetID());
+        scene.AddConstraint(rope);
 
         return true;
     }
@@ -436,22 +519,49 @@ public:
                 3 + rand() % 3,                                         // Vertices
                 10.0f + rand() % 10,                                    // Edge length
                 0.0f,                                                   // Initial angle
-                Random(-1.0f, 1.0f),                                    // Angular velocity
-                Random( 2.0f, 10.0f),                                   // Mass
+                0.0f,                                                   // Angular velocity
+                Random(2.0f, 10.0f),                                    // Mass
                 olc::Pixel(rand() % 256, rand() % 256, rand() % 256),   // Color
-                0.2f,                                                   // Coefficient of restitution
-                0.2f,                                                   // Coefficient of static friction
-                0.1f                                                    // Coefficient of dynamic friction
+                Random(0.2f, 0.6f),                                     // Coefficient of restitution
+                0.4f,                                                   // Coefficient of static friction
+                0.2f                                                    // Coefficient of dynamic friction
             );
         }
 
+        bool is_rotate = GetKey(olc::SPACE).bHeld;
+
+        if (GetMouse(1).bPressed) {
+            RigidBody rb(
+                GetMousePos() * 1.0f,
+                4,
+                100.0f,
+                is_rotate * PI/2.0f,
+                0.0f,
+                Random(2.0f, 10.0f),
+                0.2f,
+                0.4f,
+                0.2f
+            );
+
+            rb.SetColor(olc::Pixel(rand() % 256, rand() % 256, rand() % 256));
+
+            rb.SetModel({
+                { -0.5f, -0.05f },
+                {  0.5f, -0.05f },
+                {  0.5f,  0.05f },
+                { -0.5f,  0.05f } 
+            });
+            scene.AddShape(rb);
+        }
         // Logic
-        scene.Update(dt, this);
+        for (int i = 0; i < n_iter; i++) scene.Update(dt, this);
+        //rope.Update(dt);
 
         // Draw
         Clear(olc::BLACK);
         scene.Draw(this, true);
-        
+        //rope.Draw(this);
+
         return true;
     }
 };
@@ -459,7 +569,7 @@ public:
 int main() {
 
     Game game;
-    if (game.Construct(256, 256, 2, 2)) {
+    if (game.Construct(256, 256, 1, 1)) {
         game.Start();
     }
 
