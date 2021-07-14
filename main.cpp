@@ -27,19 +27,19 @@ public:
         gui.create_window("gui", "Physics Settings", { 0, 0 }, { 200, 125 });
         gui.set_active_window("gui");
     
-        gui.add_int_slider("vertices", "Vertex ", { 80, 5 }, { 100, 10 }, { 0, 10 }, &n);
-        gui.add_float_slider("angular_velocity", "AngleVel ", { 80, 20 }, { 100, 10 }, { -5.0f, 5.0f }, &angular_velocity);
+        gui.add_int_slider("vertices", "Vertex ", { 80, 5 }, { 100, 10 }, { 3, 10 }, &n);
+        gui.add_float_slider("angular_velocity", "AngleVel ", { 80, 20 }, { 100, 10 }, { 0.0f, 5.0f }, &angular_velocity);
         gui.add_float_slider("mass", "Mass ", { 80, 35 }, { 100, 10 }, { 0.0f, 100.0f }, &mass);
         gui.add_float_slider("restitution", "Restitution ", { 80, 50 }, { 100, 10 }, { 0.0f, 2.0f }, &e);
         gui.add_float_slider("static_friction", "sFriction ", { 80, 65 }, { 100, 10 }, { 0.0f, 5.0f }, &sf);
         gui.add_float_slider("dynamic_friction", "dFriction ", { 80, 80 }, { 100, 10 }, { 0.0f, 5.0f }, &df);
 
-        gui.find_element("vertices")->set_text_color(olc::Pixel(0, 0, 255));
-        gui.find_element("angular_velocity")->set_text_color(olc::Pixel(50, 0, 255));
-        gui.find_element("mass")->set_text_color(olc::Pixel(100, 0, 255));
-        gui.find_element("restitution")->set_text_color(olc::Pixel(150, 0, 255));
-        gui.find_element("static_friction")->set_text_color(olc::Pixel(200, 0, 255));
-        gui.find_element("dynamic_friction")->set_text_color(olc::Pixel(255, 0, 255));
+        gui.find_element("vertices")->set_text_color(olc::Pixel(0, 255, 0));
+        gui.find_element("angular_velocity")->set_text_color(olc::Pixel(0, 255, 50));
+        gui.find_element("mass")->set_text_color(olc::Pixel(0, 255, 100));
+        gui.find_element("restitution")->set_text_color(olc::Pixel(0, 255, 150));
+        gui.find_element("static_friction")->set_text_color(olc::Pixel(0, 255, 200));
+        gui.find_element("dynamic_friction")->set_text_color(olc::Pixel(0, 255, 255));
     }
 
     void OnMousePress() {
@@ -132,7 +132,10 @@ class Game : public olc::PixelGameEngine {
 private:
     Scene scene;
     RigidBodyDraw rb_draw;
-    int n_iter = 4;
+    int n_iter = 5;
+    
+    RigidBody* selected_shape = nullptr;
+    Constraint* selected_constraint = nullptr;
 
     static float Random(float a, float b) {
         std::random_device rd;
@@ -155,16 +158,11 @@ public:
         scene.Initialize({ ScreenWidth() * 1.0f, ScreenHeight() * 1.0f });
 
         scene.AddShape({ ScreenWidth() * 0.5f, ScreenHeight() * 1.25f }, 4, ScreenWidth() * 0.5f, PI/4.0f, 0.0f, 0.0f);
-        scene.AddShape({ ScreenWidth() * 0.5f, ScreenHeight() * 0.5f }, 5, 25.0f, PI/4.0f, 0.0f, 25.0f);
-        scene.AddShape({ ScreenWidth() * 0.75f, ScreenHeight() * 0.25f }, 10, 10.0f, 0.0f, 0.0f, 10.0f, olc::YELLOW);
+        scene.AddShape({ 0.0f, 0.0f }, 10, 15.0f, 0.0f, 0.0f, 10.0f, olc::GREEN);
 
-        Constraint rope({ ScreenWidth() * 0.25f, ScreenHeight() * 0.25f }, 60.0f, 1.5f, 0.2f, true);
-        rope.Attach(scene.GetShape(1).GetID());
-        scene.AddConstraint(rope);
-
-        Constraint rope2({ ScreenWidth() * 0.75f, ScreenHeight() * 0.25f }, 20.0f, 1.5f, 0.9f, true);
-        rope2.Attach(scene.GetShape(2).GetID());
-        scene.AddConstraint(rope2);
+        Constraint c({ ScreenWidth() * 0.25f, ScreenHeight() * 0.25f }, 100.0f, 0.8f, 0.2f, false);
+        c.Attach(1);
+        scene.AddConstraint(c);
 
         return true;
     }
@@ -176,7 +174,7 @@ public:
         // Input
         if (GetKey(olc::Z).bPressed) {
             scene.AddShape(
-                GetMousePos() * 1.0f,                                   // Position       
+                m_pos,                                                  // Position       
                 3 + rand() % 3,                                         // Vertices
                 10.0f + rand() % 10,                                    // Edge length
                 0.0f,                                                   // Initial angle
@@ -203,43 +201,35 @@ public:
             if (GetMouse(1).bReleased) rb_draw.OnMouseRelease(scene);
         }
 
-        if (is_shift && GetMouse(1).bHeld) {
-            for (const auto& c : scene.GetConstraints()) {
-                if (scene.GetShape(c.GetID()).IsContainPoint(GetMousePos() * 1.0f)) {
-                    scene.GetShape(c.GetID()).SetInputState(true);
-                    scene.GetShape(c.GetID()).SetPosition(GetMousePos() * 1.0f);
+        if (GetMouse(0).bPressed) {
+            for (auto& c : scene.GetConstraints()) {
+                RigidBody& shape = scene.GetShape(c.GetID());
+                if (shape.IsContainPoint(m_pos)) {
+                    selected_shape = &shape;
+                    selected_constraint = &c;
+                    shape.is_input = true;
                 }
             }
         }
 
-        if (is_shift && GetMouse(1).bReleased) {
+        if (selected_constraint != nullptr) {
+            if (GetMouse(0).bHeld) selected_shape->SetPosition(m_pos);
 
-            const auto& constraints = scene.GetConstraints();
-
-            for (int i = 0; i < constraints.size(); i++) {
-                if (scene.GetShape(constraints[i].GetID()).GetInputState()) {
-                    scene.GetShape(constraints[i].GetID()).SetInputState(false);
-                    if (constraints[i].IsSling()) {
-                        scene.GetConstraint(i).ApplyForces(scene.GetShape(constraints[i].GetID()), 1.0f, true);
-                        //scene.GetConstraints()[i].Reset();
-                    }
-                }
+            else if (GetMouse(0).bReleased) {
+                selected_shape->is_input = false;
+                selected_constraint->ApplyForces(*selected_shape, 1.0f, true);
+                selected_shape = nullptr;
+                selected_constraint = nullptr;
             }
         }
-
-        // if (rb_draw.index > 0) {
-        //     scene.GetShape(rb_draw.index).SetPosition(m_pos);
-        //     if (GetKey(olc::SPACE).bHeld) scene.GetShape(rb_draw.index).AddAngle(5.0f * dt);
-        // }
-
+        
         // Logic
-        Clear(olc::BLACK);
         rb_draw.Logic();
-        scene.Draw(this, true);
         for (int i = 0; i < n_iter; i++) scene.Update(dt, false);
 
         // Draw
-        
+        Clear(olc::BLACK);
+        scene.Draw(this, true);
         rb_draw.PreviewRender(this);
 
         return true;
@@ -249,7 +239,7 @@ public:
 int main() {
 
     Game game;
-    if (game.Construct(256, 256, 1, 1)) {
+    if (game.Construct(512, 512, 1, 1, false, true)) {
         game.Start();
     }
 

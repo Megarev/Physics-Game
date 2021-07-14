@@ -2,9 +2,9 @@
 #include "olcPixelGameEngine.h"
 
 // Some mathematical constants
-const float PI = 3.1415926f;
-const float g = 10.0f;
-const float EPSILON = 0.00001f;
+constexpr float PI = 3.1415926f;
+constexpr float g = 10.0f;
+constexpr float EPSILON = 0.001f;
 
 struct DebugManager {
     olc::PixelGameEngine* pge = nullptr;
@@ -15,27 +15,27 @@ class RigidBody {
 private:
     olc::vf2d position, velocity;
     std::vector<olc::vf2d> vertices, prev_vertices, model;
-    float angle = 0.0f, len = 0.0f;
-    int n = 0; // Vertices
-
+    float angle = 0.0f;
     bool first_iter = false;
+    int id = 0;
 
+    olc::Pixel color = olc::WHITE;
+public:
+    int n = 0; // Vertices
     float angular_velocity = 0.0f;
     float mass = 0.0f, inv_mass = 0.0f;
     float I = 0.0f, inv_I = 0.0f; // Moment of inertia
     float e = 0.1f; // Coefficient of restitution
     float sf = 0.8f, df = 0.4f; // Coefficient of static friction and dynamic friction
+    float len = 0.0f;
 
-    int id = 0;
     bool is_input = false; // Is the rigid body held by mouse
-
-    olc::Pixel color = olc::WHITE;
 public:
     RigidBody() {}
     RigidBody(const olc::vf2d& p, int _n, float _len, float _angle, float a, float m, float _e = 0.1f, float _sf = 0.8f, float _df = 0.4f, int _id = 0);
 
     void Logic(float dt, bool is_debug = false);
-    void ApplyImpulse(const olc::vf2d& impulse, const olc::vf2d& contact, float dt = 1.0f, float dir = 1.0f);
+    void ApplyImpulse(const olc::vf2d& impulse, const olc::vf2d& contact);
 
     bool IsConstrained(const olc::vf2d& a, const olc::vf2d& b); // Is the polygon within bounds
     bool IsContainPoint(const olc::vf2d& p); // Is the given point within polygon bounds
@@ -43,6 +43,8 @@ public:
     void Draw(olc::PixelGameEngine* pge, bool is_fill = false, float alpha = 0.0f);
     
     static std::pair<float, olc::vf2d> SATOverlap(RigidBody& a, RigidBody& b);
+    
+    void ApplyForce(const olc::vf2d& force, float dt) { velocity += force * inv_mass * dt; }
 
     void SetModel(const std::vector<olc::vf2d>& m) { model = m; }
     void SetColor(const olc::Pixel& c) { color = c; }
@@ -50,37 +52,18 @@ public:
     void Move(const olc::vf2d& o) { position += o; }
     void SetPosition(const olc::vf2d& p) { position = p; }
     const olc::vf2d& GetPosition() const { return position; }
-    
-    void AddAngle(float a) { angle += a; }
-    const float& GetAngle() const { return angle; }
-
-    const int& GetN() const { return n; }
-    const olc::vf2d& GetVertex(int i) const { return vertices[i]; }
-
-    const float& GetMass() const { return mass; }
-    const float& GetInvMass() const { return inv_mass; }
-
-    const float& GetInertia() const { return I; }
-    const float& GetInvInertia() const { return inv_I; }
-
-    void SetAngularVelocity(float a) { angular_velocity = a; }
-    const float& GetAngularVelocity() const { return angular_velocity; }
 
     void AddVelocity(const olc::vf2d& _v) { velocity += _v; }
     void SetVelocity(const olc::vf2d& v) { velocity = v; }
     const olc::vf2d& GetVelocity() const { return velocity; }
 
-    const float& GetLen() const { return len; }
-    const float& GetRestitution() const { return e; }
-    const float& GetFriction(int n) const { return !n ? sf : df; }
-
     const int& GetID() const { return id; }
     
-    const bool& GetInputState() const { return is_input; }
-    void SetInputState(bool state) { is_input = state; }
+    const olc::vf2d& GetVertex(int i) const { return vertices[i]; }
 };
 
-using Edge = std::tuple<olc::vf2d, olc::vf2d, olc::vf2d>;
+struct Edge { olc::vf2d v1, v2, edge, farthest, poly_pos; };
+
 class Manifold {
 private:
     RigidBody* a = nullptr,
@@ -90,19 +73,20 @@ private:
     olc::vf2d normal;
     std::vector<olc::vf2d> points; // Contaxts
     std::vector<float> overlaps; // Overlaps
+    Edge ref, inc;
 
     float sf = 0.0f, df = 0.0f;
 public:
     Manifold() {}
     Manifold(RigidBody* _a, RigidBody* _b, float _overlap, const olc::vf2d& _normal)
         : a(_a), b(_b), overlap(_overlap), normal(_normal) {
-            sf = std::sqrt(a->GetFriction(0) * b->GetFriction(0));
-            df = std::sqrt(a->GetFriction(1) * b->GetFriction(1));
+            sf = std::sqrt(a->sf * b->sf);
+            df = std::sqrt(a->df * b->df);
         }
     
     Edge GetBestEdge(int index, float dir);
-    std::pair<Edge, Edge> GetRefIncEdge();
-    std::vector<olc::vf2d> GetContactPoints();
+    void GetRefIncEdge();
+    void GetContactPoints();
     std::vector<olc::vf2d> Clip(const olc::vf2d& v1, const olc::vf2d& v2, const olc::vf2d& n, float o);
     
     void ApplyForces(float dt);
@@ -170,8 +154,6 @@ public:
     Constraint& GetConstraint(int index) { return constraints[index]; }
 };
 
-
-
 // Class implementations
 // RigidBody
 
@@ -191,8 +173,6 @@ RigidBody::RigidBody(const olc::vf2d& p, int _n, float _len, float _angle, float
 void RigidBody::Logic(float dt, bool is_debug) {
     // Physics Logic
     if (!is_debug) {
-        if (mass > 0.0f && !is_input) velocity.y += g * dt; // Gravity
-
         position += velocity * dt;
         angle += angular_velocity * dt;
     }
@@ -210,16 +190,16 @@ void RigidBody::Logic(float dt, bool is_debug) {
         // Translation
         vertices[i] += position;
     }
-
+    
     if (!first_iter) { 
         first_iter = true;
         prev_vertices = vertices;
     }
 }
 
-void RigidBody::ApplyImpulse(const olc::vf2d& impulse, const olc::vf2d& contact, float dt, float dir) {
-    velocity += impulse * inv_mass * dt; // v = (f/m) * dt
-    angular_velocity += contact.cross(impulse) * inv_I * dt; // w = (restoring_torque / I) * dt
+void RigidBody::ApplyImpulse(const olc::vf2d& impulse, const olc::vf2d& contact) {
+    velocity += impulse * inv_mass * 1.0f; // v = (f/m) * dt
+    angular_velocity += contact.cross(impulse) * inv_I * 1.0f; // w = (restoring_torque / I) * dt
 }
 
 std::pair<float, olc::vf2d> RigidBody::SATOverlap(RigidBody& r1, RigidBody& r2) {
@@ -236,7 +216,7 @@ std::pair<float, olc::vf2d> RigidBody::SATOverlap(RigidBody& r1, RigidBody& r2) 
         for (int i = 0; i < p1->n; i++) {
             int j = (i + 1) % p1->n;
 
-            olc::vf2d edge_normal = (p1->vertices[j] - p1->vertices[i]).perp().norm();
+            olc::vf2d edge_normal = (p1->vertices[j] - p1->vertices[i]).perp();
 
             float min_r1 = +INFINITY, max_r1 = -INFINITY;
 
@@ -265,8 +245,14 @@ std::pair<float, olc::vf2d> RigidBody::SATOverlap(RigidBody& r1, RigidBody& r2) 
         }    
     }
 
+    float overlap_len = overlap_axis.mag();
+    overlap_axis /= overlap_len;
+    overlap /= overlap_len;
+
     olc::vf2d displacement = r2.GetPosition() - r1.GetPosition();
     if (displacement.dot(overlap_axis) < 0.0f) overlap_axis *= -1.0f;
+    overlap_axis.x = std::fabsf(overlap_axis.x) < EPSILON ? 0.0f : overlap_axis.x;
+    overlap_axis.y = std::fabsf(overlap_axis.y) < EPSILON ? 0.0f : overlap_axis.y;
     
     return { overlap, overlap_axis };
 }
@@ -326,7 +312,7 @@ Edge Manifold::GetBestEdge(int index, float dir) {
     float m_dot = -INFINITY;
     int vertex = -1;
 
-    for (int i = 0; i < r->GetN(); i++) {
+    for (int i = 0; i < r->n; i++) {
         float distance = r->GetVertex(i).dot(n);
         if (distance > m_dot) {
             m_dot = distance;
@@ -335,30 +321,32 @@ Edge Manifold::GetBestEdge(int index, float dir) {
     }
 
     olc::vf2d far_vertex = r->GetVertex(vertex),
-                left_vertex = r->GetVertex(vertex-1 < 0 ? r->GetN()-1 : vertex-1),
-                right_vertex = r->GetVertex((vertex+1) % r->GetN());
+              right_vertex = r->GetVertex(vertex-1 < 0 ? r->n-1 : vertex-1),
+              left_vertex = r->GetVertex((vertex+1) % r->n);
 
     olc::vf2d left_edge = (far_vertex - left_vertex),
-                right_edge = (far_vertex - right_vertex);
+              right_edge = (far_vertex - right_vertex);
 
     if (left_edge.dot(n) <= right_edge.dot(n)) {
-        return { left_vertex, far_vertex, left_edge }; 
+        return { left_vertex, far_vertex, left_edge, far_vertex, r->GetPosition() }; 
     }
     else {
-        return { right_vertex, far_vertex, right_edge }; 
+        return { right_vertex, far_vertex, right_edge, far_vertex, r->GetPosition() }; 
     }
 }
 
-std::pair<Edge, Edge> Manifold::GetRefIncEdge() {
+void Manifold::GetRefIncEdge() {
     const auto& edge_a = GetBestEdge(0, 1.0f);
     const auto& edge_b = GetBestEdge(1,-1.0f);
 
-    if ((std::get<2>(edge_a).dot(normal)) >= (std::get<2>(edge_b).dot(normal))) {
+    if (std::fabsf(edge_a.edge.dot(normal)) <= std::fabsf(edge_b.edge.dot(normal))) {
         // Reference edge is A
-        return { edge_a, edge_b };
+        ref = edge_a;
+        inc = edge_b;
     } else {
         // Reference edge is B
-        return { edge_b, edge_a };
+        ref = edge_b;
+        inc = edge_a;
     }
 }
 
@@ -372,42 +360,34 @@ std::vector<olc::vf2d> Manifold::Clip(const olc::vf2d& v1, const olc::vf2d& v2, 
 
     if (d1 * d2 < 0.0f) {
         // Linearly interpolate ref edge
-        float u = d1 / (d1 - d2);
-
-        cp.push_back(v1 + u * (v2 - v1));
+        cp.push_back(v1 + d1 / (d1 - d2) * (v2 - v1));
     }
     
     return cp;
 }
 
-std::vector<olc::vf2d> Manifold::GetContactPoints() {
-    const auto& data = GetRefIncEdge();
-    const olc::vf2d& ref_edge = std::get<2>(data.first).norm();
-    
-    float o1 = ref_edge.dot(std::get<0>(data.first)); // Distance from origin to first vertex along ref edge
-    auto cp1 = Clip(std::get<0>(data.second), std::get<1>(data.second), ref_edge, o1);
-    if (cp1.size() != 2) return { { 0.0f, 0.0f } };
+void Manifold::GetContactPoints() {
+    GetRefIncEdge();
+    const olc::vf2d& ref_edge = ref.edge.norm();
 
-    float o2 = ref_edge.dot(std::get<1>(data.first)); // Distance from origin to second vertex along ref edge
-    auto cp2 = Clip(cp1[0], cp1[1], -ref_edge, -o2);
-    if (cp2.size() != 2) return { { 0.0f, 0.0f } };
+    auto cp1 = Clip(inc.v1, inc.v2, ref_edge, ref_edge.dot(ref.v1));
+    if (cp1.size() < 2) return;
 
-    const olc::vf2d& ref_norm = ref_edge.perp();
-    const olc::vf2d& m_vertex = std::get<1>(data.first);
+    auto cp2 = Clip(cp1[0], cp1[1], -ref_edge, -ref_edge.dot(ref.v2));
+    if (cp2.size() < 2) return;
 
-    float d = std::fabs(ref_norm.dot(m_vertex));
-    float p1 = std::fabs(cp2[0].dot(ref_norm)) - d,
-          p2 = std::fabs(cp2[1].dot(ref_norm)) - d;
-    std::vector<float> p = { p1, p2 };
+    olc::vf2d ref_norm = ref_edge.perp();
+    if ((ref.poly_pos - inc.poly_pos).dot(ref_norm) < 0.0f) ref_norm *= -1.0f;
 
-    if      (p2 < 0.0f) { cp2.erase(cp2.begin() + 1); p.erase(p.begin() + 1); }
-    else if (p1 < 0.0f) { cp2.erase(cp2.begin() + 0); p.erase(p.begin() + 0); }
+    float d = ref_norm.dot(ref.farthest);
 
-    //for (auto& p : cp2) debug_mgr.pge->FillCircle(p, 5, olc::BLUE);
+    if (cp2[1].dot(ref_norm) - d < 0.0f) { cp2.erase(cp2.begin() + 1); }
+    else if (cp2[0].dot(ref_norm) - d < 0.0f) { cp2.erase(cp2.begin() + 0); }
 
     points = cp2;
-    overlaps = p;
-    return cp2;
+    for (const olc::vf2d& p : cp2) {
+        overlaps.push_back(p.dot(ref_norm) - d);
+    }
 }
 
 void Manifold::ApplyForces(float dt) {
@@ -422,8 +402,8 @@ void Manifold::ApplyForces(float dt) {
         const olc::vf2d& ra = (p - a->GetPosition()),
                          rb = (p - b->GetPosition());
     
-        olc::vf2d va = VectorProduct(a->GetAngularVelocity(), ra),
-                  vb = VectorProduct(b->GetAngularVelocity(), rb);
+        olc::vf2d va = VectorProduct(a->angular_velocity, ra),
+                  vb = VectorProduct(b->angular_velocity, rb);
 
         olc::vf2d rv = (b->GetVelocity() - vb) - (a->GetVelocity() - va);
         
@@ -434,22 +414,21 @@ void Manifold::ApplyForces(float dt) {
               rb_n = rb.cross(normal);
 
         float inv_mass_sum = (
-            a->GetInvMass() + ra_n*ra_n*a->GetInvInertia() + 
-            b->GetInvMass() + rb_n*rb_n*b->GetInvInertia()
+            a->inv_mass + ra_n*ra_n*a->inv_I + 
+            b->inv_mass + rb_n*rb_n*b->inv_I
         );
 
-        float e = std::fmin(a->GetRestitution(), b->GetRestitution());
+        float e = std::fminf(a->e, b->e);
         float j = -(1.0f + e) * rv_normal / inv_mass_sum;
         j /= points.size();
-        j = std::fmax(j, EPSILON * 100.0f);
 
         // Normal resolution
         olc::vf2d impulse = j * normal;
-        a->ApplyImpulse(-impulse, ra, 1.0f);
-        b->ApplyImpulse( impulse, rb, 1.0f);
+        a->ApplyImpulse(-impulse, ra);
+        b->ApplyImpulse( impulse, rb);
         
-        va = VectorProduct(a->GetAngularVelocity(), ra);
-        vb = VectorProduct(b->GetAngularVelocity(), rb);
+        va = VectorProduct(a->angular_velocity, ra);
+        vb = VectorProduct(b->angular_velocity, rb);
 
         rv = (b->GetVelocity() - vb) - (a->GetVelocity() - va);
         rv_normal = rv.dot(normal);
@@ -458,33 +437,26 @@ void Manifold::ApplyForces(float dt) {
         float jt = -t.dot(rv) / inv_mass_sum;
         jt /= points.size();
 
-        if (std::fabs(jt - 0.0f) <= EPSILON) { return; }
+        if (std::fabsf(jt - 0.0f) <= EPSILON) return;
 
         olc::vf2d friction_impulse;
-        if (std::fabs(jt) <= j * sf) { friction_impulse = jt * t; }
+        if (std::fabsf(jt) <= j * sf) { friction_impulse = jt * t; }
         else { friction_impulse = -j * df * t; }
 
-        a->ApplyImpulse(-friction_impulse, ra, 1.0f);
-        b->ApplyImpulse( friction_impulse, rb, 1.0f);
+        a->ApplyImpulse(-friction_impulse, ra);
+        b->ApplyImpulse( friction_impulse, rb);
     }
 }
 
 void Manifold::PositionalCorrection() {
-    if (overlaps.size() == 2) {
-        
-        // Get the average of the two overlaps (to avoid too much deviation)
-        if (std::fabs(overlap - overlaps[1]) <= 1.0f) {
-            overlap += overlaps[1];
-            overlap /= (int)overlaps.size(); 
-        } else {
-            overlap = std::fmin(overlaps[0], overlaps[1]);
-        }
-    }
-    
-    float p = 0.5f;
-    const olc::vf2d& direction = std::fmax(overlap - 0.05f, 0.0f) / (a->GetInvMass() + b->GetInvMass()) * normal * p;
-    a->Move(-direction * a->GetInvMass());
-    b->Move( direction * b->GetInvMass());
+    float overlap_value = 0.0f;
+    for (const auto& o : overlaps) overlap_value += o;
+    overlap_value = std::fabs(overlap_value) / overlaps.size();
+
+    float p = 1.0f;
+    const olc::vf2d& direction = overlap_value * normal * p / (a->mass + b->mass);
+    a->Move(-direction * a->mass);
+    b->Move( direction * b->mass);
 }
 
 void Manifold::Logic(float dt, int iter, bool is_debug) {
@@ -507,9 +479,9 @@ void Constraint::ApplyForces(RigidBody& rb, float dt, bool is_input) {
     const olc::vf2d& offset = (extension - len) * dir;
     const olc::vf2d& force = -k * offset - b * rb.GetVelocity();
 
-    float inv_mass = is_input ? 1.0f : rb.GetInvMass();
+    float inv_mass = is_input ? 1.0f : rb.inv_mass;
 
-    if (!rb.GetInputState()) rb.AddVelocity(force * inv_mass * dt);
+    if (!rb.is_input) rb.AddVelocity(force * inv_mass * dt);
 }
 
 void Constraint::Update(RigidBody& rb, float dt) {
@@ -553,13 +525,15 @@ void Scene::Update(float dt, bool is_debug) {
             }
         }
 
-        for (auto& m : manifolds) { m.Logic(dt, 5, is_debug); }
-        
         std::vector<int> shapeID;
         for (auto& c : constraints) {
             c.Update(shapes[c.GetID()], inv_FPS);
             shapeID.push_back(c.GetID());
         }
+        
+        for (RigidBody& r : shapes) r.ApplyForce({ 0.0f, g }, dt);
+
+        for (auto& m : manifolds) { m.Logic(dt, 5, is_debug); }
         
         for (int i = shapes.size() - 1; i >= 0; i--) {
             shapes[i].Logic(inv_FPS, is_debug);
