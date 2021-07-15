@@ -67,7 +67,7 @@ private:
 
     float overlap = 0.0f;
     olc::vf2d normal;
-    std::vector<olc::vf2d> points; // Contaxts
+    std::vector<olc::vf2d> points; // Contacts
     std::vector<float> overlaps; // Overlaps
     Edge ref, inc;
 
