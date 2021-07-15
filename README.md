@@ -1,3 +1,6 @@
 # Physics-Game
 A simple physics engine made using olc::PGE
-(Using FrostUI PGEX for the GUI stuff)
+
+Required libraries
+olcPixelGameEngine (by javidx9): https://github.com/OneLoneCoder/olcPixelGameEngine
+olcPGEX_FrostUI (by Frowsty): https://github.com/Frowsty/FrostUI
