@@ -4,11 +4,7 @@
 // Some mathematical constants
 constexpr float PI = 3.1415926f;
 constexpr float g = 10.0f;
-constexpr float EPSILON = 0.001f;
-
-struct DebugManager {
-    olc::PixelGameEngine* pge = nullptr;
-} debug_mgr;
+constexpr float EPSILON = 0.0001f;
 
 // Class Declarations
 class RigidBody {
@@ -135,7 +131,6 @@ private:
     olc::vf2d screen_size;
 public:
     Scene() {}
-    Scene(olc::PixelGameEngine* pge) { debug_mgr.pge = pge; }
     void Initialize(const olc::vf2d& _screen_size) { screen_size = _screen_size; }
 
     void Update(float dt, bool is_debug = false);
@@ -251,8 +246,6 @@ std::pair<float, olc::vf2d> RigidBody::SATOverlap(RigidBody& r1, RigidBody& r2) 
 
     olc::vf2d displacement = r2.GetPosition() - r1.GetPosition();
     if (displacement.dot(overlap_axis) < 0.0f) overlap_axis *= -1.0f;
-    overlap_axis.x = std::fabsf(overlap_axis.x) < EPSILON ? 0.0f : overlap_axis.x;
-    overlap_axis.y = std::fabsf(overlap_axis.y) < EPSILON ? 0.0f : overlap_axis.y;
     
     return { overlap, overlap_axis };
 }
@@ -268,7 +261,7 @@ void RigidBody::Draw(olc::PixelGameEngine* pge, bool is_fill, float alpha) {
         for (int i = 0; i < n; i++) {
             int j = (i + 1) % n;
             
-            pge->DrawLine(interpolated_vertices[i], interpolated_vertices[j], color);
+            pge->DrawLine(interpolated_vertices[i], interpolated_vertices[j], color * 1.2f);
         }
     } else {
         for (int i = 0; i < n - 2; i++) {
@@ -451,19 +444,22 @@ void Manifold::ApplyForces(float dt) {
 void Manifold::PositionalCorrection() {
     float overlap_value = 0.0f;
     for (const auto& o : overlaps) overlap_value += o;
-    overlap_value = std::fabs(overlap_value) / overlaps.size();
+    overlap_value /= overlaps.size();
 
     float p = 1.0f;
-    const olc::vf2d& direction = overlap_value * normal * p / (a->mass + b->mass);
-    a->Move(-direction * a->mass);
-    b->Move( direction * b->mass);
+    const olc::vf2d& direction = std::fmaxf(overlap_value, 0.0f) * normal * p;
+
+    float res = 1.0f; // Resolution percentage
+    if (a->mass > 0.0f && b->mass > 0.0f) res = 0.5f;
+    if (a->mass > 0.0f) a->Move(-direction * res);
+    if (b->mass > 0.0f) b->Move( direction * res);
 }
 
 void Manifold::Logic(float dt, int iter, bool is_debug) {
-    GetContactPoints();                                        // Get contact points
+    GetContactPoints();                                   // Get contact points
     if (!is_debug) {
-        for (int i = 0; i < iter; i++) ApplyForces(dt);        // Dynamic resolution
-        PositionalCorrection();                                // Static resolution
+        PositionalCorrection();                           // Static resolution
+        for (int i = 0; i < iter; i++) ApplyForces(dt);   // Dynamic resolution
     }
 }
 
@@ -514,6 +510,21 @@ void Scene::Update(float dt, bool is_debug) {
     if (accumulator > inv_FPS) {
         accumulator -= inv_FPS;
 
+        std::vector<int> shapeID;
+        for (auto& c : constraints) {
+            c.Update(shapes[c.GetID()], inv_FPS);
+            shapeID.push_back(c.GetID());
+        }
+
+        for (int i = shapes.size() - 1; i >= 0; i--) {
+            shapes[i].Logic(inv_FPS, is_debug);
+
+            if (std::find(shapeID.begin(), shapeID.end(), i) != shapeID.end()) continue;
+
+            // Shapes in bounds
+            if (!shapes[i].IsConstrained({ 0.0f, 0.0f }, { screen_size.x, screen_size.y })) { shapes.erase(shapes.begin() + i); }
+        }
+
         std::vector<Manifold> manifolds;
         for (uint32_t a = 0; a < shapes.size() - 1; a++) {
             for (uint32_t b = a + 1; b < shapes.size(); b++) {
@@ -524,25 +535,9 @@ void Scene::Update(float dt, bool is_debug) {
                 }
             }
         }
-
-        std::vector<int> shapeID;
-        for (auto& c : constraints) {
-            c.Update(shapes[c.GetID()], inv_FPS);
-            shapeID.push_back(c.GetID());
-        }
         
-        for (RigidBody& r : shapes) r.ApplyForce({ 0.0f, g }, dt);
-
+        for (RigidBody& r : shapes) r.ApplyForce({ 0.0f, 4.0f * g }, dt);
         for (auto& m : manifolds) { m.Logic(dt, 5, is_debug); }
-        
-        for (int i = shapes.size() - 1; i >= 0; i--) {
-            shapes[i].Logic(inv_FPS, is_debug);
-
-            if (std::find(shapeID.begin(), shapeID.end(), i) != shapeID.end()) continue;
-
-            // Shapes in bounds
-            if (!shapes[i].IsConstrained({ 0.0f, 0.0f }, { screen_size.x, screen_size.y })) { shapes.erase(shapes.begin() + i); }
-        }
 
         for (int i = constraints.size() - 1; i >= 0; i--) {
             if (constraints[i].GetID() < 0) { constraints.erase(constraints.begin() + i); }
@@ -553,7 +548,10 @@ void Scene::Update(float dt, bool is_debug) {
 }
 
 void Scene::Draw(olc::PixelGameEngine* pge, bool is_fill) {
-    for (auto& s : shapes)      s.Draw(pge, is_fill, 0.0f);
+    for (auto& s : shapes) {
+        s.Draw(pge, true, 0.0f); 
+        s.Draw(pge, false, 0.0f);
+    }
     for (auto& c : constraints) c.Draw(pge);
 }
 

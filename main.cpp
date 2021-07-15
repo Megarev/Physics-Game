@@ -65,7 +65,7 @@ public:
             scale.y = std::fabs(std::fmin(scale.y + m_wheel, 1.0f));
             break;
         case 3: // S
-            len = std::fmax(len + Sign(m_wheel), 1.0f);
+            len = std::fmax(len + Sign(m_wheel) * 5.0f, 1.0f);
             break;
         }
         
@@ -151,18 +151,21 @@ public:
 
     bool OnUserCreate() override {
 
-        scene = Scene(this);
-
         rb_draw.Initialize();
 
         scene.Initialize({ ScreenWidth() * 1.0f, ScreenHeight() * 1.0f });
 
         scene.AddShape({ ScreenWidth() * 0.5f, ScreenHeight() * 1.25f }, 4, ScreenWidth() * 0.5f, PI/4.0f, 0.0f, 0.0f);
-        scene.AddShape({ 0.0f, 0.0f }, 10, 15.0f, 0.0f, 0.0f, 10.0f, olc::GREEN);
+        scene.AddShape({ 0.0f, 0.0f }, 6, 15.0f, 0.0f, 0.0f, 10.0f, olc::GREEN);
+        scene.AddShape({ ScreenWidth() * 1.0f, 0.0f }, 3, 20.0f, 0.0f, 0.0f, 2.0f, olc::MAGENTA);
 
-        Constraint c({ ScreenWidth() * 0.25f, ScreenHeight() * 0.25f }, 100.0f, 0.8f, 0.2f, false);
-        c.Attach(1);
-        scene.AddConstraint(c);
+        Constraint c1({ ScreenWidth() * 0.25f, ScreenHeight() * 0.25f }, 100.0f, 0.8f, 0.2f, false);
+        c1.Attach(1);
+        scene.AddConstraint(c1);
+
+        Constraint c2({ ScreenWidth() * 0.75f, ScreenHeight() * 0.25f }, 50.0f, 0.8f, 0.4f, false);
+        c2.Attach(2);
+        scene.AddConstraint(c2);
 
         return true;
     }
