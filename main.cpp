@@ -7,6 +7,14 @@
 
 float Sign(float value) { return value > 0.0f ? 1.0f : (value < 0.0f ? -1.0f : 0.0f); }
 
+static float Random(float a, float b) {
+    std::random_device rd;
+    static std::mt19937 m(rd());
+    std::uniform_real_distribution<> dist(a, b);
+
+    return dist(m);
+};
+
 class RigidBodyDraw {
 private:
     olc::vf2d pos, scale = { 1.0f, 1.0f };
@@ -30,9 +38,9 @@ public:
         gui.add_int_slider("vertices", "Vertex ", { 80, 5 }, { 100, 10 }, { 3, 10 }, &n);
         gui.add_float_slider("angular_velocity", "AngleVel ", { 80, 20 }, { 100, 10 }, { 0.0f, 5.0f }, &angular_velocity);
         gui.add_float_slider("mass", "Mass ", { 80, 35 }, { 100, 10 }, { 0.0f, 100.0f }, &mass);
-        gui.add_float_slider("restitution", "Restitution ", { 80, 50 }, { 100, 10 }, { 0.0f, 2.0f }, &e);
-        gui.add_float_slider("static_friction", "sFriction ", { 80, 65 }, { 100, 10 }, { 0.0f, 5.0f }, &sf);
-        gui.add_float_slider("dynamic_friction", "dFriction ", { 80, 80 }, { 100, 10 }, { 0.0f, 5.0f }, &df);
+        gui.add_float_slider("restitution", "Restitution ", { 80, 50 }, { 100, 10 }, { 0.0f, 1.0f }, &e);
+        gui.add_float_slider("static_friction", "sFriction ", { 80, 65 }, { 100, 10 }, { 0.0f, 1.0f }, &sf);
+        gui.add_float_slider("dynamic_friction", "dFriction ", { 80, 80 }, { 100, 10 }, { 0.0f, 1.0f }, &df);
 
         gui.find_element("vertices")->set_text_color(olc::Pixel(0, 255, 0));
         gui.find_element("angular_velocity")->set_text_color(olc::Pixel(0, 255, 50));
@@ -72,19 +80,21 @@ public:
         is_preview = true;
     }
 
-    void OnMouseRelease(Scene& scene) {
+    void OnMouseRelease(Scene& scene, olc::Decal* decal) {
         RigidBody rb(
             pos,
             n,
             len,
             angle,
             0.0f,
-            10.0f
+            mass
         );
 
         for (auto& m : model) m *= scale;
         rb.SetModel(model);
         rb.SetColor(olc::Pixel(rand() % 256, rand() % 256, rand() % 256));
+        rb.decal = decal;
+        rb.offset = { (rand() % 2) * pixel_size.x, 0.0f };
 
         scene.AddShape(rb);
         index++;
@@ -133,17 +143,13 @@ private:
     Scene scene;
     RigidBodyDraw rb_draw;
     int n_iter = 5;
-    
+    bool is_gravity = true;
+
     RigidBody* selected_shape = nullptr;
     Constraint* selected_constraint = nullptr;
 
-    static float Random(float a, float b) {
-        std::random_device rd;
-        static std::mt19937 m(rd());
-        std::uniform_real_distribution<> dist(a, b);
-
-        return dist(m);
-    };
+    olc::Sprite* spr_tileset = nullptr;
+    olc::Decal* dec_tileset = nullptr;
 public:
     Game() {
         sAppName = "Physics Game";
@@ -153,10 +159,21 @@ public:
 
         rb_draw.Initialize();
 
+        spr_tileset = new olc::Sprite("images/tileset.png");
+        dec_tileset = new olc::Decal(spr_tileset);
+
         scene.Initialize({ ScreenWidth() * 1.0f, ScreenHeight() * 1.0f });
 
         scene.AddShape({ ScreenWidth() * 0.5f, ScreenHeight() * 1.25f }, 4, ScreenWidth() * 0.5f, PI/4.0f, 0.0f, 0.0f);
-        scene.AddShape({ 0.0f, 0.0f }, 6, 15.0f, 0.0f, 0.0f, 10.0f, olc::GREEN);
+        scene.GetShape(0).decal = dec_tileset;
+
+        scene.AddShape({ 0.0f, 0.0f }, 5, 50.0f, PI/4.0f, 0.0f, 2.0f);
+        scene.GetShape(1).decal = dec_tileset;
+        Constraint c1({ ScreenWidth() * 0.25f, ScreenHeight() * 0.25f }, 125.0f, 0.8f, 0.4f, 10, false);
+        c1.Attach(1);
+        scene.AddConstraint(c1);
+
+        /*scene.AddShape({ 0.0f, 0.0f }, 6, 15.0f, 0.0f, 0.0f, 10.0f, olc::GREEN);
         scene.AddShape({ ScreenWidth() * 1.0f, 0.0f }, 3, 20.0f, 0.0f, 0.0f, 2.0f, olc::MAGENTA);
 
         Constraint c1({ ScreenWidth() * 0.25f, ScreenHeight() * 0.25f }, 100.0f, 0.8f, 0.2f, false);
@@ -165,7 +182,7 @@ public:
 
         Constraint c2({ ScreenWidth() * 0.75f, ScreenHeight() * 0.25f }, 50.0f, 0.8f, 0.4f, false);
         c2.Attach(2);
-        scene.AddConstraint(c2);
+        scene.AddConstraint(c2);*/
 
         return true;
     }
@@ -191,6 +208,7 @@ public:
         }
 
         bool is_shift = GetKey(olc::SHIFT).bHeld;
+        if (GetKey(olc::SPACE).bPressed) scene.is_gravity = !scene.is_gravity;
 
         int key = 0;
         if (GetKey(olc::A).bHeld) key = 0;
@@ -201,7 +219,7 @@ public:
         if (!is_shift) {
             if (GetMouse(1).bPressed) rb_draw.OnMousePress();
             if (GetMouse(1).bHeld) rb_draw.OnMouseInput(m_pos, Sign(GetMouseWheel()) * 5.0f * dt, key);
-            if (GetMouse(1).bReleased) rb_draw.OnMouseRelease(scene);
+            if (GetMouse(1).bReleased) rb_draw.OnMouseRelease(scene, dec_tileset);
         }
 
         if (GetMouse(0).bPressed) {
@@ -227,13 +245,20 @@ public:
         }
         
         // Logic
-        rb_draw.Logic();
+        Clear(olc::BLACK);
         for (int i = 0; i < n_iter; i++) scene.Update(dt, false);
+        rb_draw.Logic();
 
         // Draw
-        Clear(olc::BLACK);
-        scene.Draw(this, true);
+        scene.DrawDecals(this);
         rb_draw.PreviewRender(this);
+
+        return true;
+    }
+
+    bool OnUserDestroy() override {
+
+        delete spr_tileset, dec_tileset;
 
         return true;
     }

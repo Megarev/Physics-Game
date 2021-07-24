@@ -6,41 +6,50 @@ constexpr float PI = 3.1415926f;
 constexpr float g = 10.0f;
 constexpr float EPSILON = 0.0001f;
 
+olc::vf2d pixel_size = { 0.5f, 1.0f }; // For decal tileset
+
 // Class Declarations
 class RigidBody {
 private:
-    olc::vf2d position, velocity;
-    std::vector<olc::vf2d> vertices, prev_vertices, model;
-    float angle = 0.0f;
+    olc::vf2d position, prev_pos, velocity, acceleration;
+    std::vector<olc::vf2d> vertices, prev_vertices, model, decal_model;
     bool first_iter = false;
     int id = 0;
 
-    olc::Pixel color = olc::WHITE;
+    olc::Pixel color = olc::WHITE, shade = olc::WHITE;
 public:
     int n = 0; // Vertices
-    float angular_velocity = 0.0f;
+    float angular_velocity = 0.0f, angular_acceleration = 0.0f;
     float mass = 0.0f, inv_mass = 0.0f;
     float I = 0.0f, inv_I = 0.0f; // Moment of inertia
     float e = 0.1f; // Coefficient of restitution
     float sf = 0.8f, df = 0.4f; // Coefficient of static friction and dynamic friction
     float len = 0.0f;
+    bool is_move = true;
+    int n_iter = 0, n_iter_update = 10;
+    bool is_collide = false;
+    float angle = 0.0f, prev_angle = 0.0f;
+
+    olc::Decal* decal = nullptr;
+    olc::vf2d offset = { 0.0f, 0.0f };
 
     bool is_input = false; // Is the rigid body held by mouse
 public:
     RigidBody() {}
     RigidBody(const olc::vf2d& p, int _n, float _len, float _angle, float a, float m, float _e = 0.1f, float _sf = 0.8f, float _df = 0.4f, int _id = 0);
 
-    void Logic(float dt, bool is_debug = false);
+    void Logic(float dt, float alpha = 0.0f, bool is_debug = false);
     void ApplyImpulse(const olc::vf2d& impulse, const olc::vf2d& contact);
 
     bool IsConstrained(const olc::vf2d& a, const olc::vf2d& b); // Is the polygon within bounds
     bool IsContainPoint(const olc::vf2d& p); // Is the given point within polygon bounds
 
     void Draw(olc::PixelGameEngine* pge, bool is_fill = false, float alpha = 0.0f);
+    void Draw(olc::PixelGameEngine* pge, float alpha = 0.0f);
 
     static std::pair<float, olc::vf2d> SATOverlap(RigidBody& a, RigidBody& b);
 
-    void ApplyForce(const olc::vf2d& force, float dt) { velocity += force * inv_mass * dt; }
+    void ApplyForce(const olc::vf2d& force, float dt) { if (mass > 0.0f) velocity += force * inv_mass * dt; }
 
     void SetModel(const std::vector<olc::vf2d>& m) { model = m; }
     void SetColor(const olc::Pixel& c) { color = c; }
@@ -49,9 +58,16 @@ public:
     void SetPosition(const olc::vf2d& p) { position = p; }
     const olc::vf2d& GetPosition() const { return position; }
 
-    void AddVelocity(const olc::vf2d& _v) { velocity += _v; }
+    void SetPrevPosition(const olc::vf2d& p) { prev_pos = p; }
+    const olc::vf2d& GetPrevPosition() const { return prev_pos; }
+
+    void AddVelocity(const olc::vf2d& v) { velocity += v; }
     void SetVelocity(const olc::vf2d& v) { velocity = v; }
     const olc::vf2d& GetVelocity() const { return velocity; }
+
+    void SetAcceleration(const olc::vf2d& a) { acceleration = a; }
+    void AddAcceleration(const olc::vf2d& a) { acceleration += a; }
+    const olc::vf2d& GetAcceleration() const { return acceleration; }
 
     const int& GetID() const { return id; }
 
@@ -85,10 +101,26 @@ public:
     void GetContactPoints();
     std::vector<olc::vf2d> Clip(const olc::vf2d& v1, const olc::vf2d& v2, const olc::vf2d& n, float o);
 
+    void SetState();
+
     void ApplyForces(float dt);
     void PositionalCorrection();
 
     void Logic(float dt, int iter = 1, bool is_debug = false);
+};
+
+class Segment {
+public:
+    olc::vf2d a, b;
+    float angle = 0.0f, len = 0.0f, len0 = 0.0f;
+public:
+    Segment() {}
+    Segment(const olc::vf2d& _a, float _angle, float _len) 
+        : a(_a), angle(_angle), len(_len), len0(_len) {}
+
+    void Logic();
+    void PointTo(const olc::vf2d& p);
+    void Draw(olc::PixelGameEngine* pge) const;
 };
 
 class Constraint {
@@ -96,12 +128,13 @@ private:
     olc::vf2d pivot_pos, point_pos;
     float len = 0.0f, k = 0.8f, b = 0.2f;
 
-    int rb_id = -1;
+    std::vector<Segment> segments;
+
+    int rb_id = -1, n = 0;
     bool is_sling = false;
 public:
     Constraint() {}
-    Constraint(const olc::vf2d& p, float _len, float _k, float _b, bool _is_sling = false)
-        : pivot_pos(p), len(_len), k(_k), b(_b), is_sling(_is_sling) {}
+    Constraint(const olc::vf2d& p, float _len, float _k, float _b, int _n, bool _is_sling = false);
 
     void ApplyForces(RigidBody& rb, float dt, bool is_input = false);
     void Update(RigidBody& rb, float dt);
@@ -130,16 +163,18 @@ private:
 
     olc::vf2d screen_size;
 public:
+    bool is_gravity = true;
     Scene() {}
     void Initialize(const olc::vf2d& _screen_size) { screen_size = _screen_size; }
 
     void Update(float dt, bool is_debug = false);
     void Draw(olc::PixelGameEngine* pge, bool is_fill = false);
+    void DrawDecals(olc::PixelGameEngine* pge);
 
     void AddShape(const olc::vf2d& p, int n_vertices, float len, float angle, float angular_velocity, float mass, olc::Pixel color = olc::WHITE, float e = 0.1f, float sf = 0.8f, float df = 0.4f);
     void AddShape(const RigidBody& rb) { shapes.push_back(rb); }
 
-    void AddConstraint(const olc::vf2d& p, float len, float k, float b, int index);
+    void AddConstraint(const olc::vf2d& p, float len, float k, float b, int n, int index);
     void AddConstraint(const Constraint& c) { constraints.push_back(c); }
 
     std::vector<RigidBody>& GetShapes() { return shapes; }
@@ -156,21 +191,32 @@ RigidBody::RigidBody(const olc::vf2d& p, int _n, float _len, float _angle, float
     : position(p), n(_n), len(_len), angle(_angle), angular_velocity(a), mass(m), e(_e), sf(_sf), df(_df), id(_id) {
     for (int i = 0; i < n; i++) {
         model.push_back({ cosf(2.0f * PI / n * i), sinf(2.0f * PI / n * i) });
+        decal_model.push_back({ cosf(2.0f * PI / n * i + PI/4.0f) + 1.0f, sinf(2.0f * PI / n * i + PI/4.0f) + 1.0f });
+        decal_model[i] /= 2.0f;
+        decal_model[i] *= pixel_size;
     }
     vertices.resize(n);
     prev_vertices.resize(n);
+
+    shade = olc::Pixel(rand() % 256, rand() % 256, rand() % 256);
 
     inv_mass = mass == 0.0f ? 0.0f : 1.0f / mass;
     I = mass * len * len / 12.0f;
     inv_I = I == 0.0f ? 0.0f : 1.0f / I;
 }
 
-void RigidBody::Logic(float dt, bool is_debug) {
+void RigidBody::Logic(float dt, float alpha, bool is_debug) {
     // Physics Logic
-    if (!is_debug) {
+    if (!is_debug && is_move) {
+        velocity += acceleration * dt;
+        angular_velocity += angular_acceleration * dt;
+
         position += velocity * dt;
         angle += angular_velocity * dt;
     }
+
+    acceleration = { 0.0f, 0.0f };
+    angular_acceleration = 0.0f;
 
     for (int i = 0; i < n; i++) {
         // Rotation
@@ -189,6 +235,8 @@ void RigidBody::Logic(float dt, bool is_debug) {
     if (!first_iter) {
         first_iter = true;
         prev_vertices = vertices;
+        prev_pos = position;
+        prev_angle = angle;
     }
 }
 
@@ -272,6 +320,20 @@ void RigidBody::Draw(olc::PixelGameEngine* pge, bool is_fill, float alpha) {
             pge->FillTriangle(interpolated_vertices[0], interpolated_vertices[j], interpolated_vertices[k], color);
         }
     }
+    prev_vertices = vertices; // Update vertices
+}
+
+void RigidBody::Draw(olc::PixelGameEngine* pge, float alpha) {
+
+    if (decal == nullptr) return;
+
+    std::vector<olc::vf2d> interpolated_vertices(n), decal_draw_model(n);
+    for (uint32_t a = 0; a < vertices.size(); a++) {
+        interpolated_vertices[a] = alpha * prev_vertices[a] + (1.0f - alpha) * vertices[a];
+        decal_draw_model[a] = decal_model[a] + offset;
+    }
+
+    pge->DrawPolygonDecal(decal, interpolated_vertices, decal_draw_model, shade);
     prev_vertices = vertices; // Update vertices
 }
 
@@ -361,6 +423,71 @@ std::vector<olc::vf2d> Manifold::Clip(const olc::vf2d& v1, const olc::vf2d& v2, 
     return cp;
 }
 
+void Manifold::SetState() {
+    
+    size_t n_contacts = points.size();
+    
+    // First polygon, A
+    a->n_iter++;
+    if (a->n_iter > a->n_iter_update) {
+        a->n_iter -= a->n_iter_update;
+
+        bool is_linear_move = true;
+        if ((a->GetPosition() - a->GetPrevPosition()).mag2() <= 0.01f) {
+            is_linear_move = false;
+            a->SetVelocity(a->GetVelocity() * 0.9f);
+            if (a->GetVelocity().mag2() <= EPSILON) a->SetVelocity({ 0.0f, 0.0f });
+        }
+
+        bool is_rotational_move = true;
+        if (std::fabsf(a->angle - a->prev_angle) <= 0.01f) {
+            is_rotational_move = false;
+            a->angular_velocity *= 0.9f;
+            if (std::fabsf(a->angular_velocity) <= EPSILON) a->angular_velocity = 0.0f;
+        }
+
+        if (!(is_linear_move || is_rotational_move) && n_contacts >= 2) {
+            a->is_move = false;
+        }
+        else {
+            a->is_move = true;
+        }
+
+        a->prev_angle = a->angle;
+        a->SetPrevPosition(a->GetPosition());
+    }
+
+    // Second polygon, B
+    b->n_iter++;
+    if (b->n_iter > b->n_iter_update) {
+        b->n_iter -= b->n_iter_update;
+
+        bool is_linear_move = true;
+        if ((b->GetPosition() - b->GetPrevPosition()).mag2() <= 0.01f) {
+            is_linear_move = false;
+            b->SetVelocity(b->GetVelocity() * 0.9f);
+            if (b->GetVelocity().mag2() <= EPSILON) b->SetVelocity({ 0.0f, 0.0f });
+        }
+
+        bool is_rotational_move = true;
+        if (std::fabsf(b->angle - b->prev_angle) <= 0.01f) {
+            is_rotational_move = false;
+            b->angular_velocity *= 0.9f;
+            if (std::fabsf(b->angular_velocity) <= EPSILON) b->angular_velocity = 0.0f;
+        }
+
+        if (!(is_linear_move || is_rotational_move) && n_contacts >= 2) {
+            b->is_move = false;
+        }
+        else {
+            b->is_move = true;
+        }
+
+        b->prev_angle = b->angle;
+        b->SetPrevPosition(b->GetPosition());
+    }
+}
+
 void Manifold::GetContactPoints() {
     GetRefIncEdge();
     const olc::vf2d& ref_edge = ref.edge.norm();
@@ -388,9 +515,7 @@ void Manifold::GetContactPoints() {
 void Manifold::ApplyForces(float dt) {
     if (points.size() == 0) return;
 
-    auto VectorProduct = [](float a, const olc::vf2d& v) {
-        return olc::vf2d(v.y * a, v.x * -a);
-    };
+    auto VectorProduct = [](float a, const olc::vf2d& v) { return olc::vf2d(v.y * a, v.x * -a); };
 
     for (const olc::vf2d& p : points) {
 
@@ -417,6 +542,8 @@ void Manifold::ApplyForces(float dt) {
         float j = -(1.0f + e) * rv_normal / inv_mass_sum;
         j /= points.size();
 
+        if (j <= EPSILON) return;
+
         // Normal resolution
         olc::vf2d impulse = j * normal;
         a->ApplyImpulse(-impulse, ra);
@@ -427,12 +554,11 @@ void Manifold::ApplyForces(float dt) {
 
         rv = (b->GetVelocity() - vb) - (a->GetVelocity() - va);
         rv_normal = rv.dot(normal);
+        
+        olc::vf2d t = (rv - rv_normal * normal).norm(); // Tangent from triangle law with rv and rv_normal vector
 
-        const olc::vf2d& t = (rv - rv_normal * normal).norm(); // Tangent from triangle law with rv and rv_normal vector
         float jt = -t.dot(rv) / inv_mass_sum;
         jt /= points.size();
-
-        if (std::fabsf(jt - 0.0f) <= EPSILON) return;
 
         olc::vf2d friction_impulse;
         if (std::fabsf(jt) <= j * sf) { friction_impulse = jt * t; }
@@ -444,12 +570,8 @@ void Manifold::ApplyForces(float dt) {
 }
 
 void Manifold::PositionalCorrection() {
-    float overlap_value = 0.0f;
-    for (const auto& o : overlaps) overlap_value += o;
-    overlap_value /= overlaps.size();
-
-    float p = 1.0f;
-    const olc::vf2d& direction = std::fmaxf(overlap_value, 0.0f) * normal * p;
+    float p = 0.5f;
+    const olc::vf2d& direction = std::fmaxf(overlap - 0.025f, 0.0f) * normal * p;
 
     float res = 1.0f; // Resolution percentage
     if (a->mass > 0.0f && b->mass > 0.0f) res = 0.5f;
@@ -463,6 +585,29 @@ void Manifold::Logic(float dt, int iter, bool is_debug) {
         PositionalCorrection();                           // Static resolution
         for (int i = 0; i < iter; i++) ApplyForces(dt);   // Dynamic resolution
     }
+    SetState();
+}
+
+// Segment
+void Segment::Logic() {
+    b = a + len * olc::vf2d(cosf(angle), sinf(angle));
+}
+
+void Segment::PointTo(const olc::vf2d& p) {
+    const olc::vf2d& dir = p - a;
+    angle = atan2f(dir.y, dir.x);
+
+    a = p - len0 * olc::vf2d(cosf(angle), sinf(angle));
+}
+
+void Segment::Draw(olc::PixelGameEngine* pge) const {
+    pge->DrawLine(a, b);
+}
+
+Constraint::Constraint(const olc::vf2d& p, float _len, float _k, float _b, int _n, bool _is_sling) 
+    : pivot_pos(p), len(_len), k(_k), b(_b), n(_n), is_sling(_is_sling) {
+    float segment_len = len / n;
+    for (int i = 0; i < n; i++) segments.push_back(Segment({ 0.0f, 0.0f }, 0.0f, segment_len));
 }
 
 // Constraint
@@ -488,25 +633,36 @@ void Constraint::Update(RigidBody& rb, float dt) {
     olc::vf2d direction = rb.GetPosition() - pivot_pos;
     float dir_mag2 = direction.mag2();
 
+    float offset = std::sqrtf(dir_mag2) - len;
+    
+    if (offset > 0.0f) {
+        for (int i = 0; i < segments.size(); i++) {
+            segments[i].len = segments[i].len0 + offset / n;
+            if (i < segments.size() - 1) segments[i].angle = segments.back().angle;
+        }
+    }
+
     if (dir_mag2 > len * len) { ApplyForces(rb, dt); }
-    point_pos = rb.GetPosition();
+    // point_pos = rb.GetPosition();
+    segments.back().PointTo(rb.GetPosition());
+    for (int i = segments.size() - 2; i >= 0; i--) segments[i].PointTo(segments[i + 1].a);
+
+    segments[0].a = pivot_pos; segments[0].Logic();
+    for (int i = 1; i < segments.size(); i++) {
+        segments[i].a = segments[i - 1].b;
+        segments[i].Logic();
+    }
 }
 
 void Constraint::Draw(olc::PixelGameEngine* pge, olc::Pixel color) {
-    pge->DrawLine(pivot_pos, point_pos, color);
+    //pge->DrawLine(pivot_pos, point_pos, color);
+    for (const auto& s : segments) s.Draw(pge);
 }
 
 // Scene
 
 void Scene::Update(float dt, bool is_debug) {
     // Simulation parameters
-    float FPS = 60.0f,
-        delay = 0.1f;
-
-    float inv_FPS = 1.0f / FPS;
-
-    std::vector<Manifold> manifolds;
-
     accumulator = std::fmin(accumulator + dt, delay);
 
     if (accumulator > inv_FPS) {
@@ -519,7 +675,8 @@ void Scene::Update(float dt, bool is_debug) {
         }
 
         for (int i = shapes.size() - 1; i >= 0; i--) {
-            shapes[i].Logic(inv_FPS, is_debug);
+            if (shapes[i].mass > 0.0f && is_gravity &&
+                shapes[i].is_move && !shapes[i].is_input) shapes[i].AddAcceleration({ 0.0f, g });
 
             if (std::find(shapeID.begin(), shapeID.end(), i) != shapeID.end()) continue;
 
@@ -534,13 +691,18 @@ void Scene::Update(float dt, bool is_debug) {
                 if (manifold_data.first > 0.0f) {
                     // Add to vector if overlap > 0
                     manifolds.push_back(Manifold(&shapes[a], &shapes[b], manifold_data.first, manifold_data.second));
+                    shapes[a].is_collide = true;
+                    shapes[b].is_collide = true;
                 }
             }
         }
 
-        for (RigidBody& r : shapes) r.ApplyForce({ 0.0f, g }, inv_FPS);
-        for (auto& m : manifolds) { m.Logic(dt, 5, is_debug); }
-
+        for (auto& m : manifolds) { m.Logic(inv_FPS, 5, is_debug); }
+        for (auto& s : shapes) {
+            s.Logic(inv_FPS, 0.0f, is_debug);
+            if (!s.is_collide) s.is_move = true;
+            s.is_collide = false;
+        }
         for (int i = constraints.size() - 1; i >= 0; i--) {
             if (constraints[i].GetID() < 0) { constraints.erase(constraints.begin() + i); }
         }
@@ -550,10 +712,12 @@ void Scene::Update(float dt, bool is_debug) {
 }
 
 void Scene::Draw(olc::PixelGameEngine* pge, bool is_fill) {
-    for (auto& s : shapes) {
-        s.Draw(pge, true, 0.0f);
-        s.Draw(pge, false, 0.0f);
-    }
+    for (auto& s : shapes) s.Draw(pge, is_fill, 0.0f);
+    for (auto& c : constraints) c.Draw(pge);
+}
+
+void Scene::DrawDecals(olc::PixelGameEngine* pge) {
+    for (auto& s : shapes) s.Draw(pge, 0.0f);
     for (auto& c : constraints) c.Draw(pge);
 }
 
@@ -563,8 +727,8 @@ void Scene::AddShape(const olc::vf2d& p, int n_vertices, float len, float angle,
     shapes.push_back(rb);
 }
 
-void Scene::AddConstraint(const olc::vf2d& p, float len, float k, float b, int index) {
-    Constraint c(p, len, k, b);
+void Scene::AddConstraint(const olc::vf2d& p, float len, float k, float b, int n, int index) {
+    Constraint c(p, len, k, b, n);
     if (index >= 0) c.Attach(index);
     constraints.push_back(c);
 }
